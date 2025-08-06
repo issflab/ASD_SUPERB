@@ -34,9 +34,7 @@ wget https://datashare.ed.ac.uk/bitstream/handle/10283/3336/LA.zip
 unzip LA.zip
 ```
 
-2. Check the ASVSpoofData_2019 structure. You should have the following folder and files in LA directory at minimum.
-
-Read the Readme.txt to understand the folder and file structure.
+2. Check the ASVSpoofData_2019 structure. You should have the following folder and files in LA directory at minimum. Read the Readme.txt to understand the folder and file structure.
 
 ```
 ASVSpoofData_2019/
