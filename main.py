@@ -8,16 +8,19 @@ from torch import Tensor
 from torch.utils.data import DataLoader
 from torchcontrib.optim import SWA
 import yaml
-from data_utils_SSL import genSpoof_list_multidata, Multi_Dataset_train
+from data_utils_SSL import genSpoof_list, Dataset_ASVspoof2019_train, Dataset_ASVspoof2021_eval
 from aasist_model import Model as aasist_model
 from sls_model import Model as sls_model
+from config import cfg
+from utils import create_optimizer, seed_worker, set_seed, str_to_bool
+from evaluation import calculate_EER
+
 from tensorboardX import SummaryWriter
 from core_scripts.startup_config import set_random_seed
-from config import cfg
+
 from sklearn.metrics import balanced_accuracy_score
 import json
 from tqdm import tqdm
-from utils import create_optimizer, seed_worker, set_seed, str_to_bool
 
 __author__ = "Hashim Ali"
 __email__ = "alhashim@umich.edu"
@@ -58,36 +61,53 @@ def evaluate_accuracy(dev_loader, model, device):
     return val_loss, balanced_acc
 
 
-def produce_evaluation_file(dataset, model, device, save_path):
-    data_loader = DataLoader(dataset, batch_size=10, shuffle=False, drop_last=False)
-    num_correct = 0.0
-    num_total = 0.0
+def produce_evaluation(data_loader, model, device, save_path):
     model.eval()
+
+    val_loss = 0.0
+    num_total = 0.0
+    weight = torch.FloatTensor([0.1, 0.9]).to(device)
+    criterion = nn.CrossEntropyLoss(weight=weight)
     
     fname_list = []
     key_list = []
     score_list = []
+
+    y_true = []
+    y_pred = []
     
     for batch_x, utt_id, batch_y in data_loader:
+        batch_size = batch_x.size(0)
+        num_total += batch_size
+        
         fname_list = []
         score_list = []  
-        batch_size = batch_x.size(0)
+        
         batch_x = batch_x.to(device)
+        batch_y = batch_y.view(-1).type(torch.int64).to(device)
         
         batch_out = model(batch_x)
-        
         batch_score = (batch_out[:, 1]).data.cpu().numpy().ravel() 
         batch_score = batch_score.tolist()
+
+        batch_loss = criterion(batch_out, batch_y)
+        val_loss += (batch_loss.item() * batch_size)
         
-        # add outputs
+        # Writing score to file
         fname_list.extend(utt_id)
         score_list.extend(batch_score)
+        key_list.extend(batch_y)
         
         with open(save_path, 'a+') as fh:
-            for f, cm in zip(fname_list,score_list):
-                fh.write('{} {}\n'.format(f, cm))
-        fh.close()   
+            for f, k, cm in zip(fname_list, key_list, score_list):
+                fh.write('{} {}\n'.format(f, k, cm))
+        fh.close()  
+
+    val_loss /= num_total
+
     print('Scores saved to {}'.format(save_path))
+
+    return val_loss
 
 
 def train_epoch(train_loader, model, lr,optim, device):
@@ -126,9 +146,9 @@ def train_epoch(train_loader, model, lr,optim, device):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='SSL + AASIST System trained on multiple datasets')
 
-    parser.add_argument('--database_path', type=str, default='/data/Data/', help='Change this to the base data directory which contain multiple datasets.')
-    parser.add_argument('--protocols_path', type=str, default='/data/Data/protocols/', help='Change this to the path which contain protocol files')
-    parser.add_argument('--ssl_feature', type=str, default='wavlm_large', help='Change this to the path which contain protocol files')
+    parser.add_argument('--database_path', type=str, default='/data/Data/ASVSpoofData_2019/train/LA/', help='Change this to the base data directory which contains datasets.')
+    parser.add_argument('--protocols_path', type=str, default='/data/Data/ASVSpoofData_2019/train/LA/ASVspoof2019_LA_cm_protocols/', help='Change this to the path which contain protocol files')
+    parser.add_argument('--ssl_feature', type=str, default='wavlm_large', help='Change this to the ssl model name')
 
     # Hyperparameters
     parser.add_argument('--batch_size', type=int, default=14)
@@ -207,36 +227,24 @@ if __name__ == '__main__':
     
     ##===================================================Rawboost data augmentation ======================================================================#
 
-    model_out_dir = '/data/ssl_anti_spoofing/multi_datasets_models'   # directory to save the models in
-    
-    # name this variable based on datasets being used to train the models
-    # CodecFake = codec
-    # Famous Figures = FF
-    # ASVspoof 2019 = ASV19
-    # ASVspoof 2025 = ASV5
-    # FakeXpose = FX
-    # In the Wild = ITW
-    # DFADD = DFADD
-    # MLAAD = MLAAD
-    # SpoofCeleb = SpoofCeleb
-    # example, data_name = 'codec_FF_ASV19_MLAAD'
-    # data_name = 'ASV19_CodecTTS_FF_MLAAD'
-    # data_name = 'mlaad_spoofceleb_FF'
-    data_name = 'Codec_FF_ITW_Pod_mlaad_spoofceleb'
-
-    if not os.path.exists(model_out_dir):
-        os.mkdir(model_out_dir)
-
     # train_protocol_filename = 'SAFE_challenge_train_latest_protocol.txt'
     # dev_protocol_filename = 'SAFE_challenge_dev_latest_protocol.txt'
 
     # train_protocol_filename = 'SAFE_challenge_train_latest_protocol.txt'
     # dev_protocol_filename = 'SAFE_challenge_dev_latest_protocol.txt'
 
-    train_protocol_filename = 'SAFE_Challenge_train_protocol_Codec_FF_ITW_Pod_mlaad_spoofceleb.txt'
-    dev_protocol_filename = 'SAFE_Challenge_dev_protocol_Codec_FF_ITW_Pod_mlaad_spoofceleb.txt'
+    # train_protocol_filename = 'SAFE_Challenge_train_protocol_Codec_FF_ITW_Pod_mlaad_spoofceleb.txt'
+    # dev_protocol_filename = 'SAFE_Challenge_dev_protocol_Codec_FF_ITW_Pod_mlaad_spoofceleb.txt'
     
     args = parser.parse_args()
+
+    # Override config with CLI if provided
+    if args.database_path:
+        cfg.database_path = args.database_path
+    if args.protocols_path:
+        cfg.protocols_path = args.protocols_path
+    if args.model_path:
+        cfg.pretrained_checkpoint = args.model_path
 
     with open("./AASIST.conf", "r") as f_json:
         args_config = json.loads(f_json.read())
@@ -248,113 +256,146 @@ if __name__ == '__main__':
     set_random_seed(args.seed, args)
 
     #define model saving path
-    model_tag = 'model_{}_{}_{}_{}_{}_{}'.format(args.loss, args.num_epochs, args.batch_size, args.lr, data_name, args.ssl_feature)
+    model_tag = 'model_{}_{}_{}_{}_{}_{}'.format(args.loss, args.num_epochs, args.batch_size, args.lr, cfg.dataset, args.ssl_feature)
     
     if args.comment:
         model_tag = model_tag + '_{}'.format(args.comment)
     
-    model_save_path = os.path.join(model_out_dir, model_tag)
+    writer = SummaryWriter(f'logs/{model_tag}')
 
-    #set model save directory
-    if not os.path.exists(model_save_path):
-        os.mkdir(model_save_path)
+    # prepare save path
+    model_save_path = os.path.join(cfg.save_dir, cfg.model_tag)
+    os.makedirs(model_save_path, exist_ok=True)
+    
 
     #GPU device
-    device = 'cuda:1' if torch.cuda.is_available() else 'cpu'                  
+    device = cfg.cuda_device if torch.cuda.is_available() else 'cpu'                  
     print('Device: {}'.format(device))
-    
-    # aasist model
-    model = aasist_model(args, device)
 
-    # sls model
-    # model = sls_model(args, device)
+    # instantiate model based on config
+    if cfg.model_arch == 'aasist':
+        model = aasist_model(args, device)
+    elif cfg.model_arch == 'sls':
+        model = sls_model(args, device)
+    elif cfg.model_arch == 'xlsrmamba':
+        model = XLSRMambaModel(args, device)
+    else:
+        raise ValueError(f'Unknown model architecture: {cfg.model_arch}')
+    model = model.to(device)
 
-    nb_params = sum([param.view(-1).size()[0] for param in model.parameters()])
-    model =model.to(device)
-    print('nb_params:',nb_params)
+    nb_params = sum(p.numel() for p in model.parameters())
+    print('nb_params:', nb_params)
 
     #set Adam optimizer
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr,weight_decay=args.weight_decay)
-    
-    if args.model_path:
-        model.load_state_dict(torch.load(args.model_path,map_location=device))
-        print('Model loaded : {}'.format(args.model_path))
 
+    # load pretrained checkpoint if given
+    if cfg.pretrained_checkpoint:
+        print('Loading pretrained checkpoint from', cfg.pretrained_checkpoint)
+        model.load_state_dict(torch.load(cfg.pretrained_checkpoint, map_location=device))
 
-    #evaluation 
-    # if args.eval:
-    #     file_eval = genSpoof_list( dir_meta =  os.path.join(args.protocols_path+'/ASVspoof2019.LA.cm.train.trn.txt'.format(prefix,prefix_2021)),is_train=False,is_eval=True)
-    #     #file_eval = genSpoof_list( dir_meta =  os.path.join(args.protocols_path+'fakeXpose_protocol.txt'.format(prefix,prefix_2021)),is_train=False,is_eval=True)
-    #     #file_eval = genSpoof_list( dir_meta =  os.path.join(args.protocols_path+'protocols/wild_meta.txt'.format(prefix,prefix_2021)),is_train=False,is_eval=True)
+    # dataset prep
+    train_proto = os.path.join(cfg.protocols_path, cfg.train_protocol)
+    dev_proto = os.path.join(cfg.protocols_path, cfg.dev_protocol)
 
-    #     print('no. of eval trials',len(file_eval))
-    #     #eval_set=Dataset_ASVspoof2021_eval(list_IDs = file_eval,base_dir = os.path.join(args.database_path+'ASVspoof2019_LA_eval/'.format(args.track)))
-    #     eval_set=Dataset_ASVspoof2021_eval(list_IDs = file_eval,base_dir = os.path.join(args.database_path+''.format(args.track)))
-    #     produce_evaluation_file(eval_set, model, device, args.eval_output)
-    #     sys.exit(0)
+    d_label_trn, file_train = genSpoof_list(train_proto, is_train=True)
+    d_label_dev, file_dev = genSpoof_list(dev_proto, is_train=False)
 
+    print("Train protocol:", getattr(cfg, "train_protocol_path", cfg.train_protocol))
+    print("Dev protocol:", getattr(cfg, "dev_protocol_path", cfg.dev_protocol))
+    print("Database base path:", cfg.database_path)
+    for tag, file_list in (("TRAIN", file_train), ("DEV", file_dev)):
+        print(f"Sample {tag} utt_ids (first 3):", file_list[:3])
+        for utt in file_list[:3]:
+            full = os.path.join(cfg.database_path, utt)
+            print(f"  [{tag}] {utt} -> {full} exists: {os.path.isfile(full)}")
     
-    # define train dataloader
-    d_label_trn, file_train = genSpoof_list_multidata(dir_meta =  os.path.join(args.protocols_path, train_protocol_filename), is_train=True, is_eval=False)
-    
-    print('no. of training trials',len(file_train))
-    
-    # train_set=Dataset_ASVspoof2019_train(args,list_IDs = file_train,labels = d_label_trn,base_dir = os.path.join(args.database_path+'ASVspoof2019_LA_train/'.format(prefix_2019.split('.')[0],args.track)),algo=args.algo)
 
-    train_set=Multi_Dataset_train(args, list_IDs=file_train, labels = d_label_trn, base_dir=args.database_path, algo=args.algo)
-    train_loader = DataLoader(train_set, batch_size=args.batch_size,num_workers=8, shuffle=True,drop_last = True)
-    
-    del train_set,d_label_trn
+    train_set = Dataset_ASVspoof2019_train(args, list_IDs=file_train, labels=d_label_trn,
+                                            base_dir=cfg.database_path, algo=args.algo)
+    dev_set = Dataset_ASVspoof2019_train(args, list_IDs=file_dev, labels=d_label_dev,
+                                            base_dir=cfg.database_path, algo=args.algo)
 
-    # define validation dataloader
-    d_label_dev,file_dev = genSpoof_list_multidata(dir_meta=os.path.join(args.protocols_path, dev_protocol_filename), is_train=False, is_eval=False)
-    
-    print('no. of validation trials',len(file_dev))
-    
-    dev_set = Multi_Dataset_train(args, list_IDs=file_dev, labels=d_label_dev, base_dir=args.database_path, algo=args.algo)
-    dev_loader = DataLoader(dev_set, batch_size=args.batch_size,num_workers=8, shuffle=False)
-    del dev_set,d_label_dev
+    print('no. of training trials', len(file_train))
+    print('no. of validation trials', len(file_dev))
 
-    # get optimizer and scheduler
+    train_loader = DataLoader(train_set, batch_size=args.batch_size,
+                              num_workers=8, shuffle=True, drop_last=True)
+    dev_loader = DataLoader(dev_set, batch_size=args.batch_size,
+                            num_workers=8, shuffle=False)
+
+    # optimizer + scheduler
+    # load external config if exists
+    with open("./AASIST.conf", "r") as f_json:
+        args_config = json.loads(f_json.read())
+    optim_config = args_config["optim_config"]
+    optim_config["epochs"] = args.num_epochs
     optim_config["steps_per_epoch"] = len(train_loader)
     optimizer, scheduler = create_optimizer(model.parameters(), optim_config)
     optimizer_swa = SWA(optimizer)
 
-    # Training and validation 
-    num_epochs = args.num_epochs
-    writer = SummaryWriter('logs/{}'.format(model_tag))
+    # make directory for metric logging
+    metric_path = model_tag / "metrics"
+    os.makedirs(metric_path, exist_ok=True)
 
-    best_val_acc = 0.5
-    n_swa_update = 0
-    
-    for epoch in range(num_epochs):
+    # train vs eval
+    if cfg.mode == 'train':
+        best_val_eer = 0.0
+        n_swa_update = 0
+
+        for epoch in range(args.num_epochs):
+            train_loss = train_epoch(train_loader, model, optimizer, device)
+
+            val_loss = produce_evaluation(dev_loader, model, device, metric_path/"dev_score.txt")
+
+            dev_eer = calculate_EER(cm_scores_file=metric_path/"dev_score.txt")
+
+            writer.add_scalar('train_loss', train_loss, epoch)
+            writer.add_scalar('val_loss', val_loss, epoch)
+            writer.add_scalar('val_eer', dev_eer, epoch)
+            print(f"Epoch {epoch} - train_loss: {train_loss:.4f} - val_loss: {val_loss:.4f} - val_eer: {dev_eer:.4f}")
+
+            if dev_eer < best_val_eer:
+                print(f"Best model updated at epoch {epoch}")
+                best_val_eer = dev_eer
+                torch.save(model.state_dict(),
+                           os.path.join(model_save_path, "epoch_{}_{:03.3f}.pth".format(epoch, dev_eer)))
+                
+                # SWA update on improvement (as per prior logic)
+                print("Saving epoch {} for swa".format(epoch))
+                optimizer_swa.update_swa()
+                n_swa_update += 1
+
+            writer.add_scalar("best_dev_eer", best_val_eer, epoch)
+
+        print("Finalizing SWA (if any updates occurred)")
+        if n_swa_update > 0:
+            optimizer_swa.swap_swa_sgd()
+            optimizer_swa.bn_update(train_loader, model, device=device)
+            torch.save(model.state_dict(), os.path.join(model_save_path, "swa.pth"))
+
+    elif cfg.mode == 'eval':
+
+        eval_proto = os.path.join(cfg.protocols_path, cfg.eval_protocol)
         
-        running_loss = train_epoch(train_loader, model, args.lr, optimizer, device)
+        file_eval = genSpoof_list(eval_proto, is_train=False, is_eval=True)
+        eval_set = Dataset_ASVspoof2021_eval(args, list_IDs=file_eval, base_dir=cfg.database_path)
+
+        print('no. of eval trials',len(file_eval))
         
-        val_loss, val_balanced_acc = evaluate_accuracy(dev_loader, model, device)
-        writer.add_scalar('val_loss', val_loss, epoch)
-        writer.add_scalar('loss', running_loss, epoch)
-        writer.add_scalar('val_balanced_acc', val_balanced_acc, epoch)
-        print('\n{} - {} - {} - {} '.format(epoch, running_loss, val_loss, val_balanced_acc))
+        # fallback to best.pth if no explicit checkpoint
+        if not cfg.pretrained_checkpoint:
+            candidate = os.path.join(cfg.save_dir, cfg.model_name, 'best.pth')
+            if os.path.isfile(candidate):
+                print('Loading best checkpoint from', candidate)
+                model.load_state_dict(torch.load(candidate, map_location=device))
         
-        if best_val_acc <= val_balanced_acc:
-            print("best model find at epoch", epoch)
-            best_val_acc = val_balanced_acc
-            torch.save(model.state_dict(), os.path.join(model_save_path, "epoch_{}_{:03.3f}.pth".format(epoch, val_balanced_acc)))
+        # val_loss, val_balanced_acc = evaluate_accuracy(eval_loader, model, device)
+        # print(f'EVAL: val_loss={val_loss:.4f}, balanced_acc={val_balanced_acc:.4f}')
 
-            print("Saving epoch {} for swa".format(epoch))
-            optimizer_swa.update_swa()
-            n_swa_update += 1
+        produce_evaluation(eval_set, model, device, args.eval_output)
 
-        writer.add_scalar("best val balanced accuracy", best_val_acc, epoch)
-
-
-    print("Start final evaluation")
-    epoch += 1
-    if n_swa_update > 0:
-        optimizer_swa.swap_swa_sgd()
-        optimizer_swa.bn_update(train_loader, model, device=device)
-
-    torch.save(model.state_dict(), os.path.join(model_save_path, "swa.pth"))
+    else:
+        raise ValueError("cfg.mode must be 'train' or 'eval'")
     
     
