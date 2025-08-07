@@ -7,7 +7,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
 #import fairseq
-from feature_extraction import deep_learning
+from s3prl.nn import S3PRLUpstream, Featurizer
 
 
 ___author__ = "Hemlata Tak"
@@ -19,43 +19,110 @@ __email__ = "tak@eurecom.fr"
 
 
 class SSLModel(nn.Module):
-    def __init__(self, device, args):
+    def __init__(self, n_layerss, device, args):
         super(SSLModel, self).__init__()
-
         self.device = device
-        self.layer_num = 0
+        self.model_name = args.ssl_feature
+        self.model = S3PRLUpstream(self.model_name).to(self.device)
+        self.featurizer = Featurizer(self.model).to(self.device)
+        self.n_layers=n_layerss
+        self.out_dim = self.featurizer.output_size
 
-        self.model = deep_learning(model_name=args.ssl_feature, device=device)
+    def extract_feat_featurizer(self, waveform):
+        waveform = waveform.squeeze(1)
+        wavs_len = torch.LongTensor([waveform.size(1) for _ in range(waveform.size(0))])
+        with torch.no_grad():
+            all_hs, all_hs_len = self.model(waveform.to(self.device), wavs_len.to(self.device))
+        hs, hs_len = self.featurizer(all_hs, all_hs_len)
+        return hs, hs_len
+    
+    def extract_feat(self, waveform):
+        waveform = waveform.squeeze(1)
+        wavs_len = torch.LongTensor([waveform.size(1) for _ in range(waveform.size(0))])
+        with torch.no_grad():
+            all_hs, all_hs_len = self.model(waveform.to(self.device), wavs_len.to(self.device))
+        return torch.stack([t[0].permute(1,0,2) if isinstance(t, tuple) else t for t in all_hs[:self.n_layers]], dim=1)
+    
+    def _sample_indices(self, total_layers: int):
+        k = min(self.n_layers, total_layers)
+        if k == total_layers:
+            return list(range(total_layers))
+        step = (total_layers - 1) / (k - 1)
+        return [int(step * i) for i in range(k)]
 
-        out_dim_dict = {'wavlm_large': 1024, 'mae_ast_frame':768, 'npc_960hr':512}
-        self.out_dim = out_dim_dict[args.ssl_feature]
+    def extract_feat_sample(self, waveform):
+        waveform = waveform.squeeze(1)
+        wavs_len = torch.LongTensor([waveform.size(1)] * waveform.size(0))
+        with torch.no_grad():
+            all_hs, _ = self.model(waveform.to(self.device), wavs_len.to(self.device))
+        # sample your indices
+        idxs = self._sample_indices(len(all_hs))
+        # print(idxs)
+        # pick & permute
+        feats = []
+        for i in idxs:
+            t = all_hs[i]
+            x = t[0].permute(1,0,2) if isinstance(t, tuple) else t
+            feats.append(x)
+        # result: (batch, chosen_layers, time, dim)
+        # print(torch.stack(feats, dim=1).shape)
+        return torch.stack(feats, dim=1)
+    
+    def extract_feat_1n(self, waveform):
+        # print(waveform.shape,wavs_len.shape)
+        waveform = waveform.squeeze(1)
+        wavs_len = torch.LongTensor([waveform.size(1) for _ in range(waveform.size(0))])
+        # print(waveform.shape,wavs_len.shape)
+        with torch.no_grad():
+            all_hs, all_hs_len = self.model(waveform.to(self.device), wavs_len.to(self.device))
+        return torch.stack([t[0].permute(1,0,2) if isinstance(t, tuple) else t for t in all_hs[1:self.n_layers + 1]], dim=1)
+
+    def freeze_feature_extraction(self):
+        """Freezes the feature extraction layers of the base SSL model."""
+        for param in self.model.feature_extractor.parameters():
+            param.requires_grad = False
+
+    def freeze_model(self):
+        for param in self.model.parameters():
+            param.requires_grad = False
+
+
+# class SSLModel(nn.Module):
+#     def __init__(self, device, args):
+#         super(SSLModel, self).__init__()
+
+#         self.device = device
+#         self.layer_num = 0
+
+#         self.model = deep_learning(model_name=args.ssl_feature, device=device)
+
+#         out_dim_dict = {'wavlm_large': 1024, 'mae_ast_frame':768, 'npc_960hr':512}
+#         self.out_dim = out_dim_dict[args.ssl_feature]
         
-        # self.device = device
-        # self.model = deep_learning(model_name=args.ssl_feature, device=device) # or 'wav2vec2_base', as you prefer
-        # # wavlm_large -> 1024, mae_ast_frame -> 768
-        # self.out_dim = 1024  # Default for hubert_base (for xlsr2_300m -> 1024, but hubert -> 768)
-        # return
+#         # self.device = device
+#         # self.model = deep_learning(model_name=args.ssl_feature, device=device) # or 'wav2vec2_base', as you prefer
+#         # # wavlm_large -> 1024, mae_ast_frame -> 768
+#         # self.out_dim = 1024  # Default for hubert_base (for xlsr2_300m -> 1024, but hubert -> 768)
+#         # return
 
-    def extract_feat(self, input_data):
-        """
-        Extract SSL feature embeddings from raw waveforms without aggregating over time.
-        """
-        if input_data.ndim == 3:
-            input_tmp = input_data[:, :, 0]  
-            # remove channel dim
-        else:
-            input_tmp = input_data
-        emb = self.model.extract_feat_from_waveform(input_tmp, aggregate_emb=False, layer_number=self.layer_num)
+#     def extract_feat(self, input_data):
+#         """
+#         Extract SSL feature embeddings from raw waveforms without aggregating over time.
+#         """
+#         if input_data.ndim == 3:
+#             input_tmp = input_data[:, :, 0]  
+#             # remove channel dim
+#         else:
+#             input_tmp = input_data
+#         emb = self.model.extract_feat_from_waveform(input_tmp, aggregate_emb=False, layer_number=self.layer_num)
 
-        emb = torch.tensor(emb, device=self.device).float()
+#         emb = torch.tensor(emb, device=self.device).float()
 
-        if emb.ndim == 2:
-            # Currently (batch, feature) --> expand time dimension manually
-            emb = emb.unsqueeze(1)  # (batch, 1, feature)
-        # print("embedding shape = {}".format(emb.shape))
-        return emb
-
-
+#         if emb.ndim == 2:
+#             # Currently (batch, feature) --> expand time dimension manually
+#             emb = emb.unsqueeze(1)  # (batch, 1, feature)
+#         # print("embedding shape = {}".format(emb.shape))
+#         return emb
 
 
 #---------AASIST back-end------------------------#
