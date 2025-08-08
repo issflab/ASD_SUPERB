@@ -10,7 +10,8 @@ from torchcontrib.optim import SWA
 import yaml
 from data_utils_SSL import genSpoof_list, Dataset_ASVspoof2019_train, Dataset_ASVspoof2021_eval
 from aasist_model import Model as aasist_model
-from sls_model import Model as sls_model
+# from sls_model import Model as sls_model
+from linear_model import UtteranceLevel as LinearHead
 from config import cfg
 from utils import create_optimizer, seed_worker, set_seed, str_to_bool
 from evaluation import calculate_EER
@@ -61,7 +62,7 @@ def evaluate_accuracy(dev_loader, model, device):
     return val_loss, balanced_acc
 
 
-def produce_evaluation(data_loader, model, device, save_path):
+def produce_evaluation(data_loader, model, device, save_path, trial_path):
     model.eval()
 
     val_loss = 0.0
@@ -73,15 +74,14 @@ def produce_evaluation(data_loader, model, device, save_path):
     key_list = []
     score_list = []
 
-    y_true = []
-    y_pred = []
+    trial_lines = []
+
+    with open(trial_path, "r") as f_trl:
+        trial_lines.extend(f_trl.readlines())
     
-    for batch_x, utt_id, batch_y in data_loader:
+    for batch_x, utt_id, batch_y in tqdm(data_loader):
         batch_size = batch_x.size(0)
         num_total += batch_size
-        
-        fname_list = []
-        score_list = []  
         
         batch_x = batch_x.to(device)
         batch_y = batch_y.view(-1).type(torch.int64).to(device)
@@ -97,11 +97,20 @@ def produce_evaluation(data_loader, model, device, save_path):
         fname_list.extend(utt_id)
         score_list.extend(batch_score)
         key_list.extend(batch_y)
-        
-        with open(save_path, 'a+') as fh:
-            for f, k, cm in zip(fname_list, key_list, score_list):
-                fh.write('{} {}\n'.format(f, k, cm))
-        fh.close()  
+    
+    print(len(fname_list), len(key_list), len(score_list), len(trial_lines))
+    assert len(trial_lines) == len(fname_list) == len(score_list)
+    with open(save_path, "w") as fh:
+        for fn, sco, trl in zip(fname_list, score_list, trial_lines):
+            _, utt_id, _, src, key = trl.strip().split(' ')
+
+            assert fn == utt_id
+            fh.write("{} {} {} {}\n".format(utt_id, src, key, sco))
+    
+    # with open(save_path, 'w') as fh:
+    #     for f, k, cm in zip(fname_list, key_list, score_list):
+    #         fh.write('{} {} {}\n'.format(f, k, cm))
+    # fh.close()  
 
     val_loss /= num_total
 
@@ -110,7 +119,7 @@ def produce_evaluation(data_loader, model, device, save_path):
     return val_loss
 
 
-def train_epoch(train_loader, model, lr,optim, device):
+def train_epoch(train_loader, model, optimizer, device):
     running_loss = 0
     
     num_total = 0.0
@@ -264,7 +273,7 @@ if __name__ == '__main__':
     writer = SummaryWriter(f'logs/{model_tag}')
 
     # prepare save path
-    model_save_path = os.path.join(cfg.save_dir, cfg.model_tag)
+    model_save_path = os.path.join(cfg.save_dir, model_tag)
     os.makedirs(model_save_path, exist_ok=True)
     
 
@@ -277,8 +286,8 @@ if __name__ == '__main__':
         model = aasist_model(args, device)
     elif cfg.model_arch == 'sls':
         model = sls_model(args, device)
-    elif cfg.model_arch == 'xlsrmamba':
-        model = XLSRMambaModel(args, device)
+    elif cfg.model_arch == 'linear_head':
+        model = LinearHead(args, device)
     else:
         raise ValueError(f'Unknown model architecture: {cfg.model_arch}')
     model = model.to(device)
@@ -304,17 +313,18 @@ if __name__ == '__main__':
     print("Train protocol:", getattr(cfg, "train_protocol_path", cfg.train_protocol))
     print("Dev protocol:", getattr(cfg, "dev_protocol_path", cfg.dev_protocol))
     print("Database base path:", cfg.database_path)
-    for tag, file_list in (("TRAIN", file_train), ("DEV", file_dev)):
-        print(f"Sample {tag} utt_ids (first 3):", file_list[:3])
-        for utt in file_list[:3]:
-            full = os.path.join(cfg.database_path, utt)
-            print(f"  [{tag}] {utt} -> {full} exists: {os.path.isfile(full)}")
+    # for tag, file_list in (("TRAIN", file_train), ("DEV", file_dev)):
+    #     print(f"Sample {tag} utt_ids (first 3):", file_list[:3])
+    #     for utt in file_list[:3]:
+    #         full = os.path.join(cfg.database_path, utt + '.flac')
+    #         print(f"  [{tag}] {utt} -> {full} exists: {os.path.isfile(full)}")
     
 
     train_set = Dataset_ASVspoof2019_train(args, list_IDs=file_train, labels=d_label_trn,
-                                            base_dir=cfg.database_path, algo=args.algo)
+                                            base_dir=os.path.join(cfg.database_path, 'ASVspoof2019_LA_train'), 
+                                            algo=args.algo)
     dev_set = Dataset_ASVspoof2019_train(args, list_IDs=file_dev, labels=d_label_dev,
-                                            base_dir=cfg.database_path, algo=args.algo)
+                                            base_dir=os.path.join(cfg.database_path, 'ASVspoof2019_LA_dev'), algo=args.algo)
 
     print('no. of training trials', len(file_train))
     print('no. of validation trials', len(file_dev))
@@ -335,20 +345,21 @@ if __name__ == '__main__':
     optimizer_swa = SWA(optimizer)
 
     # make directory for metric logging
-    metric_path = model_tag / "metrics"
+    metric_path = os.path.join(model_tag, "metrics")
     os.makedirs(metric_path, exist_ok=True)
 
+    os.path.join(metric_path, "dev_score.txt")
     # train vs eval
     if cfg.mode == 'train':
-        best_val_eer = 0.0
+        best_val_eer = 1
         n_swa_update = 0
 
         for epoch in range(args.num_epochs):
             train_loss = train_epoch(train_loader, model, optimizer, device)
 
-            val_loss = produce_evaluation(dev_loader, model, device, metric_path/"dev_score.txt")
+            val_loss = produce_evaluation(dev_loader, model, device, os.path.join(metric_path, "dev_score.txt"), dev_proto)
 
-            dev_eer = calculate_EER(cm_scores_file=metric_path/"dev_score.txt")
+            dev_eer = calculate_EER(cm_scores_file=os.path.join(metric_path, "dev_score.txt"))
 
             writer.add_scalar('train_loss', train_loss, epoch)
             writer.add_scalar('val_loss', val_loss, epoch)
@@ -379,7 +390,7 @@ if __name__ == '__main__':
         eval_proto = os.path.join(cfg.protocols_path, cfg.eval_protocol)
         
         file_eval = genSpoof_list(eval_proto, is_train=False, is_eval=True)
-        eval_set = Dataset_ASVspoof2021_eval(args, list_IDs=file_eval, base_dir=cfg.database_path)
+        eval_set = Dataset_ASVspoof2021_eval(args, list_IDs=file_eval, base_dir=os.path.join(cfg.database_path, 'ASVspoof2019_LA_eval'))
 
         print('no. of eval trials',len(file_eval))
         
@@ -393,7 +404,7 @@ if __name__ == '__main__':
         # val_loss, val_balanced_acc = evaluate_accuracy(eval_loader, model, device)
         # print(f'EVAL: val_loss={val_loss:.4f}, balanced_acc={val_balanced_acc:.4f}')
 
-        produce_evaluation(eval_set, model, device, args.eval_output)
+        produce_evaluation(eval_set, model, device, args.eval_output, eval_proto)
 
     else:
         raise ValueError("cfg.mode must be 'train' or 'eval'")
