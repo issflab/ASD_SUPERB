@@ -16,6 +16,8 @@ from config import cfg
 from utils import create_optimizer, seed_worker, set_seed, str_to_bool
 from evaluation import calculate_EER
 
+from s3prl import hub
+
 from tensorboardX import SummaryWriter
 from core_scripts.startup_config import set_random_seed
 
@@ -157,7 +159,11 @@ if __name__ == '__main__':
 
     parser.add_argument('--database_path', type=str, default='/data/Data/ASVSpoofData_2019/train/LA/', help='Change this to the base data directory which contains datasets.')
     parser.add_argument('--protocols_path', type=str, default='/data/Data/ASVSpoofData_2019/train/LA/ASVspoof2019_LA_cm_protocols/', help='Change this to the path which contain protocol files')
-    parser.add_argument('--ssl_feature', type=str, default='wavlm_large', help='Change this to the ssl model name')
+    
+    upstreams = [attr for attr in dir(hub) if attr[0] != '_']
+    parser.add_argument('--ssl_feature', type=str, default='wavlm_large', help='''Change this to the ssl model name.
+                        Available options in S3PRL: {}.
+                        '''.format(upstreams))
 
     # Hyperparameters
     parser.add_argument('--batch_size', type=int, default=14)
@@ -224,7 +230,7 @@ if __name__ == '__main__':
 
     # ISD_additive_noise parameters
     parser.add_argument('--P', type=int, default=10, 
-                    help='Maximum number of uniformly distributed samples in [%].[defaul=10]')
+                    help='Maximum number of uniformly distributed samples in percentage.[defaul=10]')
     parser.add_argument('--g_sd', type=int, default=2, 
                     help='gain parameters > 0. [default=2]')
 
