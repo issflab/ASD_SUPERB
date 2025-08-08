@@ -12,9 +12,9 @@ def calculate_EER(cm_scores_file):
     # Load CM scores
     cm_data = np.genfromtxt(cm_scores_file, dtype=str)
     cm_utt_id = cm_data[:, 0]
-    # cm_sources = cm_data[:, 1]
-    cm_keys = cm_data[:, 1]
-    cm_scores = cm_data[:, 2].astype(float)
+    cm_sources = cm_data[:, 1]
+    cm_keys = cm_data[:, 2]
+    cm_scores = cm_data[:, 3].astype(float)
 
 
     # Extract bona fide (real human) and spoof scores from the CM scores
