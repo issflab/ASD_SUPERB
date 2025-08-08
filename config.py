@@ -5,7 +5,7 @@ import os
 @dataclass
 class Config:
     #'aasist', 'sls', or 'xlsrmamba'
-    model_arch: Literal['aasist', 'sls', 'xlsrmamba'] = 'xlsrmamba'
+    model_arch: Literal['aasist', 'sls', 'linear_head'] = 'linear_head'
 
     # Dataset name
     # name this variable based on datasets being used to train the models
