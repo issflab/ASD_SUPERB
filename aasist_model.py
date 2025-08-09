@@ -509,6 +509,7 @@ class Model(nn.Module):
     def __init__(self, args, device):
         super().__init__()
         self.device = device
+        self.args=args
         
         # AASIST parameters
         filts = [128, [1, 32], [32, 32], [32, 64], [64, 64]]
@@ -520,7 +521,7 @@ class Model(nn.Module):
         ####
         # create network wav2vec 2.0
         ####
-        self.ssl_model = SSLModel(self.device, args)
+        self.ssl_model = SSLModel(24, device=self.device, args=self.args)
         self.LL = nn.Linear(self.ssl_model.out_dim, 128)
 
         self.first_bn = nn.BatchNorm2d(num_features=1)
@@ -581,7 +582,8 @@ class Model(nn.Module):
 
     def forward(self, x):
         #-------pre-trained Wav2vec model fine tunning ------------------------##
-        x_ssl_feat = self.ssl_model.extract_feat(x.squeeze(-1))
+        # x_ssl_feat = self.ssl_model.extract_feat(x.squeeze(-1))
+        x_ssl_feat, features_len = self.ssl_model.extract_feat_featurizer(x)
         x = self.LL(x_ssl_feat) #(bs,frame_number,feat_out_dim)
         
         # post-processing on front-end features

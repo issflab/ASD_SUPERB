@@ -161,7 +161,7 @@ if __name__ == '__main__':
     parser.add_argument('--protocols_path', type=str, default='/data/Data/ASVSpoofData_2019/train/LA/ASVspoof2019_LA_cm_protocols/', help='Change this to the path which contain protocol files')
     
     upstreams = [attr for attr in dir(hub) if attr[0] != '_']
-    parser.add_argument('--ssl_feature', type=str, default='wavlm_large', help='''Change this to the ssl model name.
+    parser.add_argument('--ssl_model', type=str, default='wavlm_large', help='''Change this to the ssl model name.
                         Available options in S3PRL: {}.
                         '''.format(upstreams))
 
@@ -271,7 +271,7 @@ if __name__ == '__main__':
     set_random_seed(args.seed, args)
 
     #define model saving path
-    model_tag = 'model_{}_{}_{}_{}_{}_{}'.format(args.loss, args.num_epochs, args.batch_size, args.lr, cfg.dataset, args.ssl_feature)
+    model_tag = 'model_{}_{}_{}_{}_{}_{}'.format(args.loss, args.num_epochs, args.batch_size, cfg.model_arch, cfg.dataset, args.ssl_feature)
     
     if args.comment:
         model_tag = model_tag + '_{}'.format(args.comment)
