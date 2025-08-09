@@ -1,3 +1,51 @@
+"""
+config.py
+---------
+Configuration management for ASD_SUPERB.
+
+This file defines the Config dataclass, which centralizes all configuration options
+for model architecture, dataset selection, file paths, training/evaluation modes, and device settings.
+
+Environment variables can override default values for flexible deployment.
+
+Classes:
+    Config: Main configuration class with properties for protocol paths and model saving.
+
+Usage:
+    Import cfg from this file to access configuration throughout the project.
+    Example:
+        from config import cfg
+        print(cfg.model_arch)
+
+Configuration Options:
+    model_arch: Backend Model architecture to use ('aasist', 'sls', 'linear_head').
+    dataset: Name of the dataset(s) used for training. Used for naming conventions.
+    database_path: Root directory containing audio data.
+    protocols_path: Directory containing protocol files.
+    train_protocol: Filename for training protocol.
+    dev_protocol: Filename for development protocol.
+    mode: 'train' or 'eval' to set the running mode.
+    save_dir: Directory to save models and logs.
+    model_name: Name/tag for the current model run.
+    cuda_device: CUDA device string (e.g., 'cuda:0').
+    pretrained_checkpoint: Optional path to a pretrained model checkpoint.
+
+Methods:
+    train_protocol_path: Returns full path to training protocol file.
+    dev_protocol_path: Returns full path to development protocol file.
+    model_save_path: Returns directory path for saving model checkpoints.
+    prepare_dirs: Creates necessary directories for saving outputs.
+
+Environment Variables:
+    SSL_MODEL_ARCH
+    SSL_DATABASE_PATH
+    SSL_PROTOCOLS_PATH
+    SSL_MODE
+    SSL_MODEL_NAME
+    CUDA_DEVICE
+    SSL_PRETRAINED_CHECKPOINT
+"""
+
 from dataclasses import dataclass
 from typing import Optional, Literal
 import os
@@ -5,7 +53,7 @@ import os
 @dataclass
 class Config:
     #'aasist', 'sls', or 'xlsrmamba'
-    model_arch: Literal['aasist', 'sls', 'linear_head'] = 'linear_head'
+    model_arch: Literal['aasist', 'sls', 'linear_head'] = 'aasist'
 
     # Dataset name
     # name this variable based on datasets being used to train the models
@@ -24,8 +72,8 @@ class Config:
     # data_name = 'Codec_FF_ITW_Pod_mlaad_spoofceleb'
     dataset: str = 'ASV19'
 
-    database_path: str = '/data/Data'   # root that contains e.g. spoofceleb/flac/...
-    protocols_path: str = '/data/Data'  
+    database_path: str = '/data/Data/ASVSpoofData_2019/train/LA/'   # root that contains e.g. spoofceleb/flac/...
+    protocols_path: str = '/data/Data/ASVSpoofData_2019/train/LA/ASVspoof2019_LA_cm_protocols/'  # path that contains protocol files
 
     train_protocol: str = 'ASVspoof2019.LA.cm.train.trn.txt'
     dev_protocol: str = 'ASVspoof2019.LA.cm.dev.trl.txt'
