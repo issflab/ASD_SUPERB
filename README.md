@@ -47,9 +47,10 @@ ASVSpoofData_2019/
 ```
 
 ## Training
+To traia a model. First set up the config.py file with the required parameteres. By default, a linear head model will be trained on ASVSpoof 2019 data. The repository is configured to use only ASVSpoof 2019 LA data for training. Here is a sample command to run training. This command will train WavLM-LinearHead model with a batch size of 64 and number of epochs equal to 50. Use -h to look for more ssl_model options. 
 
 ```
-python3 main.py --batch_size 64 --num_epochs 50 --lr 1e-6 --weight_decay 1e-4 --ssl_feature wavlm_large
+python3 main.py --batch_size 64 --num_epochs 50 --ssl_model wavlm_large
 ```
 
 ## Evaluation
