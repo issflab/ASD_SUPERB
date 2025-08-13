@@ -271,7 +271,7 @@ if __name__ == '__main__':
     set_random_seed(args.seed, args)
 
     #define model saving path
-    model_tag = 'model_{}_{}_{}_{}_{}_{}'.format(args.loss, args.num_epochs, args.batch_size, cfg.model_arch, cfg.dataset, args.ssl_feature)
+    model_tag = 'model_{}_{}_{}_{}_{}_{}'.format(args.loss, args.num_epochs, args.batch_size, cfg.model_arch, cfg.dataset, args.ssl_model)
     
     if args.comment:
         model_tag = model_tag + '_{}'.format(args.comment)
